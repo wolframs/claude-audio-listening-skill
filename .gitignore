@@ -1,0 +1,16 @@
+# Never commit the key.
+config.json
+.env
+*.key
+secrets*
+
+# Local artifacts
+ears.md
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.ogg
+*.opus
+__pycache__/
+*.pyc
