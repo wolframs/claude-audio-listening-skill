@@ -47,14 +47,20 @@ of any repo, gist, or chat export.
 - **Default: `google/gemini-3.8-flash`** — $0.75/M in (audio same rate), $3.75/M out
 - **Also verified working:** `google/gemini-3.7-flash` (same price), `google/gemini-3.6-flash`,
   `google/gemini-3.5-flash-lite`, `openai/gpt-audio-mini`
-- `xiaomi/mimo-v2.5` — accepts audio, but not verified through this script:
-  a request logged against it came back with `audio_tokens: 0`. See below.
-  Check the token count before trusting a word.
+- `xiaomi/mimo-v2.5` — works, many successful runs through this script, and
+  much cheaper. Gemini 3.8 Flash still describes music better. One logged
+  request came back with `audio_tokens: 0` — see below.
 - `xiaomi/mimo-v2.5-pro` — **text-only, no audio input. Never substitute it for
   `xiaomi/mimo-v2.5`.** It reads like the upgrade. It is not.
 - ~~`xiaomi/mimo-v2-omni`~~ — DEPRECATED at OpenRouter (HTTP 404)
 - The Gemini flash line ships new checkpoints every few weeks and older ones stay
   live. Don't trust this list; run `describe_audio.py --list-live-models`.
+- **New music-trained models keep appearing.** Most "audio input" models are
+  trained on speech (ASR, TTS) and hear words, not music; every now and then
+  one arrives that was trained on music itself. When `--list-live-models` shows
+  an unfamiliar audio model, tell the user it exists. Offer to run one track
+  they know through it next to `google/gemini-3.8-flash`, and compare the
+  timbre and arrangement detail, not just the lyrics. Check `audio_tokens`.
 
 ## The silent-drop trap — read before switching models
 

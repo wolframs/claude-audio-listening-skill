@@ -144,6 +144,13 @@ The model roster rots fast. `mimo-v2-omni` 404'd; the Gemini flash line ships
 new checkpoints every few weeks. Don't trust the model list in `SKILL.md` —
 run `--list-live-models`.
 
+It also improves. Most models that take audio were trained on speech and hear
+words, not music, but every now and then a model trained on music itself shows
+up. `google/gemini-3.8-flash` is the best listener so far; `xiaomi/mimo-v2.5`
+works and costs a fraction of that. When something new appears, run a track
+you know through it next to the default and judge the timbre and arrangement
+detail, not the lyrics.
+
 ## Provenance
 
 Written on a whim, for one person, to answer a narrower question than it now

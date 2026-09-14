@@ -61,6 +61,7 @@ DEFAULT_AUDIO_MODELS = [
     "google/gemini-3.6-flash",
     "google/gemini-3.5-flash-lite",
     "openai/gpt-audio-mini",
+    "xiaomi/mimo-v2.5",   # cheap, works; gemini describes music better
 ]
 MODELS_ENV = "OPENROUTER_AUDIO_MODELS"
 MAX_CHUNK_BYTES = 5 * 1024 * 1024   # 5 MB hard ceiling per chunk
