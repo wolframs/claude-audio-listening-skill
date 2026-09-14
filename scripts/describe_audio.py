@@ -43,15 +43,16 @@ from pathlib import Path
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
-# Sep 2026: xiaomi/mimo-v2.5 was removed as a route entirely. OpenRouter lists
-# it with "audio" in input_modalities, but it silently DISCARDS the audio block
-# and bills as text (usage.audio_tokens == 0). Its descriptions were invented
-# from the prompt. See "The MiMo trap" in SKILL.md. input_modalities is not
+# Sep 2026: a MiMo request came back with usage.audio_tokens == 0 — the audio
+# block was accepted, billed as text, and never reached the model, which then
+# invented a description from the prompt. MiMo v2.5 does take audio; likelier
+# causes are the text-only -pro slug or OpenRouter routing to a provider that
+# drops audio. See "The silent-drop trap" in SKILL.md. input_modalities is not
 # evidence; audio_tokens in the response is.
 DEFAULT_MODEL = "google/gemini-3.8-flash"
 CROSS_CHECK_PARTNER = "google/gemini-3.7-flash"
 
-# Verified audio-capable on OpenRouter as of Sep 2026 (input_modalities: audio).
+# Verified audio-capable on OpenRouter as of Sep 2026 (audio_tokens > 0).
 # NOTE: xiaomi/mimo-v2-omni was DEPRECATED (404) — do not use.
 # NOTE: xiaomi/mimo-v2.5-pro is TEXT-ONLY — do not "upgrade" to it.
 DEFAULT_AUDIO_MODELS = [
@@ -364,7 +365,8 @@ def describe_chunk(chunk_path: Path, prompt: str, api_key: str, model: str,
         print(
             f"\n!! {model} reported audio_tokens=0 — the audio was NOT ingested.\n"
             f"!! Any description below is invented from the text prompt alone.\n"
-            f"!! Pick a different model; see 'The MiMo trap' in SKILL.md.\n",
+            f"!! Check the slug is not a text-only variant (e.g. -pro), then retry\n"
+            f"!! or switch models; see 'The silent-drop trap' in SKILL.md.\n",
             file=sys.stderr, flush=True)
     elif audio_tokens:
         print(f"_{model}: {audio_tokens} audio tokens ingested_",
@@ -375,7 +377,7 @@ def describe_chunk(chunk_path: Path, prompt: str, api_key: str, model: str,
         if not (content or "").strip():
             fr = data["choices"][0].get("finish_reason")
             return (f"_[empty response from {model} (finish_reason={fr}, "
-                    f"audio_tokens={audio_tokens}) — likely not an audio model]_")
+                    f"audio_tokens={audio_tokens}) — the audio may not have arrived]_")
         if audio_tokens == 0:
             content = ("> **WARNING: audio_tokens=0 — this model did not receive "
                        "the audio. Treat everything below as fabricated.**\n\n"
@@ -404,7 +406,7 @@ def live_audio_models() -> list[str]:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))["data"]
-    priced, suspect = [], []
+    priced, unpriced = [], []
     for m in data:
         mods = m.get("architecture", {}).get("input_modalities", []) or []
         if "audio" not in mods:
@@ -413,14 +415,14 @@ def live_audio_models() -> list[str]:
         audio_price = pr.get("input_audio") or pr.get("audio")
         line = (f"{m['id']}  (in {pr.get('prompt')} / out {pr.get('completion')}"
                 f" / audio {audio_price})")
-        (priced if audio_price else suspect).append(line)
-    out = ["# claims audio input AND carries an audio price — plausible:"]
+        (priced if audio_price else unpriced).append(line)
+    out = ["# claims audio input, lists a separate audio rate:"]
     out += sorted(priced)
     out += ["",
-            "# claims audio input but has NO audio price — SUSPECT.",
-            "# These may accept the audio block and silently drop it.",
-            "# Verify with audio_tokens > 0 before trusting a single word:"]
-    out += sorted(suspect)
+            "# claims audio input, no separate audio rate. Pricing proves nothing",
+            "# either way (xiaomi/mimo-v2.5 takes audio and lands here).",
+            "# For any model, verify audio_tokens > 0 before trusting a word:"]
+    out += sorted(unpriced)
     return out
 
 

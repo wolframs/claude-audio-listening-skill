@@ -47,49 +47,62 @@ of any repo, gist, or chat export.
 - **Default: `google/gemini-3.8-flash`** — $0.75/M in (audio same rate), $3.75/M out
 - **Also verified working:** `google/gemini-3.7-flash` (same price), `google/gemini-3.6-flash`,
   `google/gemini-3.5-flash-lite`, `openai/gpt-audio-mini`
-- ~~`xiaomi/mimo-v2.5`~~ — **DOES NOT ACTUALLY INGEST AUDIO. Do not use.** See below.
+- `xiaomi/mimo-v2.5` — accepts audio, but not verified through this script:
+  a request logged against it came back with `audio_tokens: 0`. See below.
+  Check the token count before trusting a word.
+- `xiaomi/mimo-v2.5-pro` — **text-only, no audio input. Never substitute it for
+  `xiaomi/mimo-v2.5`.** It reads like the upgrade. It is not.
 - ~~`xiaomi/mimo-v2-omni`~~ — DEPRECATED at OpenRouter (HTTP 404)
-- `xiaomi/mimo-v2.5-pro` — text-only, no audio input
 - The Gemini flash line ships new checkpoints every few weeks and older ones stay
   live. Don't trust this list; run `describe_audio.py --list-live-models`.
 
-## The MiMo trap — read before adding any "cheap" model
+## The silent-drop trap — read before switching models
 
-`xiaomi/mimo-v2.5` is listed on OpenRouter with `"audio"` in
-`architecture.input_modalities`. **It is not an audio model.** It accepts an
-`input_audio` content block, silently drops it, and bills as plain text.
+A request can carry an `input_audio` block, return HTTP 200, bill as plain
+text, and never deliver the audio to the model. Nothing errors.
 
-Proof, same file, same prompt (Sep 2026):
+Same file, same prompt (Sep 2026):
 
-| model | prompt_tokens | audio_tokens | result |
+| request | prompt_tokens | audio_tokens | result |
 |---|---|---|---|
-| `xiaomi/mimo-v2.5` | 1130 | **0** | 1499 reasoning tokens, empty content |
+| MiMo, logged as `xiaomi/mimo-v2.5` | 1130 | **0** | 1499 reasoning tokens, empty content |
 | `google/gemini-3.8-flash` | 4340 | **4316** | full description |
 
+An earlier version of this skill concluded MiMo v2.5 is "not an audio model".
+That was wrong — it does take audio. Two likelier causes, neither confirmed:
+
+1. **The wrong slug.** `xiaomi/mimo-v2.5-pro` is text-only. Models asked to use
+   MiMo reach for `-pro` as the better variant, however plainly they're told
+   not to. Claude: if you are about to type `-pro`, stop.
+2. **Provider routing.** OpenRouter serves `xiaomi/mimo-v2.5` from several
+   providers and picks one per request. A provider that doesn't pass audio
+   through produces exactly this result, and a retry may land elsewhere.
+
 The dangerous part is not the empty response — that fails loudly. It is the
-*non-empty* one. Given a shorter prompt, MiMo returns fluent, specific,
-confident music criticism invented entirely from the text: it described a sea
-shanty as drum-and-bass with rubbery wobble bass and a Lapfox-adjacent lineage,
-complete with a fabricated phonetic transcription of an intro it had not
-received. Nothing in the output signals that no audio arrived.
+*non-empty* one. Given a shorter prompt, a MiMo request with the same problem
+returned fluent, specific, confident music criticism invented entirely from
+the text: it described a sea shanty as drum-and-bass with rubbery wobble bass
+and a Lapfox-adjacent lineage, complete with a fabricated phonetic
+transcription of an intro the model had not received. Nothing in the output
+signals that no audio arrived.
 
 **This is the worst possible failure for a translation layer.** Claude reads the
 description as perception. There is no seam to notice.
 
 ### The check that catches it
 
-`input_modalities` is not evidence. Two things are:
+`input_modalities` is not evidence, and neither is pricing: `xiaomi/mimo-v2.5`
+handles audio but lists no separate audio rate. One thing is:
 
-1. **A pricing line for audio.** Genuine audio models on OpenRouter carry an
-   audio rate in `pricing`. MiMo's is absent. `--list-live-models` now sorts
-   the roster into "has an audio price" and "SUSPECT".
-2. **`usage.prompt_tokens_details.audio_tokens > 0` in the response.** This is
-   the authoritative signal — it says the audio was tokenized, not merely
-   accepted. A three-minute track should produce thousands.
+**`usage.prompt_tokens_details.audio_tokens > 0` in the response.** It says the
+audio was tokenized, not merely accepted, and it catches a wrong slug and a bad
+route alike. A three-minute track should produce thousands.
 
-The script checks (2) on every call and prints a loud warning when audio tokens
-come back zero. Before adopting any new model here, run one file through it and
-read the token counts. Cheap is worthless if it isn't listening.
+The script checks it on every call and prints a loud warning when it comes back
+zero. Before adopting any model here, run one file through it and read the
+token count. Because routing can change per request, a model that passed once
+can still fail later — the per-call check is the one that counts. Cheap is
+worthless if it isn't listening.
 
 A second tell, free and instant: **if the output is dominated by a lyric
 transcript and says almost nothing about timbre or arrangement, you picked a
@@ -236,7 +249,7 @@ python scripts/describe_audio.py track.mp3 --cross-check
 # Fit a constrained execution window
 python scripts/describe_audio.py track.mp3 --shrink --max-seconds 90 --out ears.md
 
-# What actually accepts audio on OpenRouter today, with suspects flagged
+# What actually accepts audio on OpenRouter today, split by whether an audio rate is listed
 python scripts/describe_audio.py --list-live-models
 
 # Where is my key coming from?
@@ -311,7 +324,7 @@ and the file source varies.
 
 ## Onomatopoeia warning
 
-(See also "The MiMo trap" above — the same confabulation tendency operating one
+(See also "The silent-drop trap" above — the same confabulation tendency operating one
 level up, on the whole track rather than a syllable.)
 
 Audio models confidently mis-transcribe non-word vocals into real words: a

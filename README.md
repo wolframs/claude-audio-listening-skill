@@ -32,31 +32,38 @@ calls and gives you about two minutes of foreground wall clock per call.
 
 ## The trap this skill exists to document
 
-`xiaomi/mimo-v2.5` is listed on OpenRouter with `"audio"` in
-`architecture.input_modalities`. It is not an audio model. It accepts the
-`input_audio` block, **silently discards it**, and bills as plain text.
+An audio request can succeed without the audio ever reaching the model: HTTP
+200, the `input_audio` block accepted, a bill for plain text, no error.
 
-| model | prompt_tokens | audio_tokens | result |
+| request | prompt_tokens | audio_tokens | result |
 |---|---|---|---|
-| `xiaomi/mimo-v2.5` | 1130 | **0** | 1499 reasoning tokens, empty content |
+| MiMo, logged as `xiaomi/mimo-v2.5` | 1130 | **0** | 1499 reasoning tokens, empty content |
 | `google/gemini-3.8-flash` | 4340 | **4316** | full description |
 
+An earlier version of this README blamed the model and said MiMo v2.5 can't
+hear. It can. Two likelier causes, neither confirmed:
+
+1. **The wrong slug.** `xiaomi/mimo-v2.5-pro` is text-only, and models asked to
+   use MiMo keep reaching for `-pro` as the "better" one, however plainly
+   they're told not to.
+2. **Provider routing.** OpenRouter serves `xiaomi/mimo-v2.5` from several
+   providers and picks one per request. One that doesn't pass audio through
+   gives exactly this result.
+
 The empty response is the *harmless* case — it fails loudly. The dangerous case
-is the non-empty one: given a shorter prompt, the same model described a sea
-shanty as drum-and-bass with rubbery wobble bass and a Lapfox-adjacent lineage,
-complete with a fabricated phonetic transcription of an intro it had never
-received. Nothing in the output marks it as invention. Claude reads a
-description as perception; there is no seam to notice.
+is the non-empty one: given a shorter prompt, a MiMo request with the same
+problem described a sea shanty as drum-and-bass with rubbery wobble bass and a
+Lapfox-adjacent lineage, complete with a fabricated phonetic transcription of
+an intro the model had never received. Nothing in the output marks it as
+invention. Claude reads a description as perception; there is no seam to
+notice.
 
-Two checks catch it, and `input_modalities` is neither of them:
+Neither `input_modalities` nor pricing catches it — `xiaomi/mimo-v2.5` hears
+audio but lists no separate audio rate. One check does: **`audio_tokens > 0` in
+the response.** It means the audio was tokenized, not merely accepted, and it
+catches a wrong slug and a bad route alike. The script checks it on every call.
 
-1. **An audio line in `pricing`.** Genuine audio models carry one.
-   `--list-live-models` now sorts the live roster into *has an audio price* and
-   *SUSPECT*.
-2. **`audio_tokens > 0` in the response.** Authoritative — it means the audio
-   was tokenized, not merely accepted.
-
-A third, free and instant: if the output is all lyrics and nothing about
+A second, free and instant: if the output is all lyrics and nothing about
 timbre, you picked a speech model. Most models advertising audio input are ASR.
 They hear words, not music.
 
