@@ -111,9 +111,10 @@ Read the result against the track:
   model.
 - **Is it mostly a lyric transcript with nothing about the instruments?** You
   picked a speech model. Most models advertising audio input are ASR. Switch.
-- **Does stderr report `N audio tokens ingested`?** That's the only proof the
-  audio arrived. `audio_tokens=0` means everything above it was invented from
-  the prompt text.
+- **Does stderr report `N audio tokens ingested`?** That proves the audio
+  arrived. A zero proves nothing: some providers report 0 even when the model
+  heard every note. Check the result against something the prompt couldn't
+  supply — lyrics you know, or where the drop lands.
 - **Treat every transcribed lyric as a guess**, including confident ones.
   Non-words get snapped to the nearest real word — a repeated "meow" has come
   back as "mail" and as "kneel" from different models on the same file.

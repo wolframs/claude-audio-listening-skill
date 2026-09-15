@@ -49,8 +49,9 @@ picture (Part 2) needs no key at all.
 the relay.** If the user wants something in the meantime, offer the picture.
 Setup takes about three minutes, covers the monthly spend cap
 (which is the actual safety control here, not secrecy), and covers the
-claude.ai domain-allowlist step. Do not guess at a key, do not proceed without
-one, and do not silently switch to describing the filename instead of the audio.
+claude.ai domain-allowlist step. Do not guess at a key, do not run the relay
+without one, and do not silently switch to describing the filename instead of
+the audio.
 
 ```bash
 python scripts/describe_audio.py --check-key
@@ -68,10 +69,10 @@ Resolution order: `--api-key` → `$OPENROUTER_API_KEY` →
 `$AUDIO_LISTENING_CONFIG` → `<skill>/config.json` → `<skill>/.env` →
 `~/.config/audio-listening/config.json` → `~/.config/openrouter/key`.
 
-Putting the key directly in this file also works and some people will prefer it
-for a single-user setup. That is a legitimate choice when the key is
-spend-capped — but then the file is no longer shareable, so keep that copy out
-of any repo, gist, or chat export.
+Pasting the key into this SKILL.md also works for a single-user setup; the
+script won't find it here, so Claude passes it with `--api-key`. That is a
+legitimate choice when the key is spend-capped — but then the file is no longer
+shareable, so keep that copy out of any repo, gist, or chat export.
 
 ## Models (verified Sep 2026)
 

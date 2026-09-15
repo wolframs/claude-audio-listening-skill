@@ -52,7 +52,7 @@ OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 DEFAULT_MODEL = "google/gemini-3.8-flash"
 CROSS_CHECK_PARTNER = "google/gemini-3.7-flash"
 
-# Verified audio-capable on OpenRouter as of Sep 2026 (audio_tokens > 0).
+# Verified audio-capable on OpenRouter as of Sep 2026.
 # NOTE: xiaomi/mimo-v2-omni was DEPRECATED (404) — do not use.
 # NOTE: xiaomi/mimo-v2.5-pro is TEXT-ONLY — do not "upgrade" to it.
 DEFAULT_AUDIO_MODELS = [
@@ -68,7 +68,7 @@ MAX_CHUNK_BYTES = 5 * 1024 * 1024   # 5 MB hard ceiling per chunk
 SAFETY_MARGIN = 0.92                 # aim for ~92% of ceiling per chunk
 MP3_REENCODE_BITRATE = "192k"        # for non-mp3 inputs
 SUPPORTED_DIRECT = {".mp3"}          # used as-is, just split
-SUPPORTED_CONVERT = {".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".webm"}
+SUPPORTED_CONVERT = {".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".aiff"}
 
 DEFAULT_PROMPT = """You are listening to a piece of audio. Translate this listening \
 experience into rich, exquisite text for another LLM that processes only language. \
@@ -174,6 +174,7 @@ To fix, write ONE of these (the config file is the reliable one — a shell
 Claude: if the user does not have a key yet, do NOT guess or fabricate one.
 Walk them through references/api-key-setup.md — it takes about three minutes
 and includes the spend-cap step that makes the rest of this safe.
+look_at_audio.py needs no key, so offer that in the meantime.
 """
 
 
@@ -435,7 +436,7 @@ def live_audio_models() -> list[str]:
     out += ["",
             "# claims audio input, no separate audio rate. Pricing proves nothing",
             "# either way (xiaomi/mimo-v2.5 takes audio and lands here).",
-            "# For any model, verify audio_tokens > 0 before trusting a word:"]
+            "# For any model, check a track with known lyrics before trusting a word:"]
     out += sorted(unpriced)
     return out
 
@@ -462,19 +463,20 @@ def check_openrouter_reachable() -> tuple[bool, str]:
 PREFLIGHT_FAIL_MSG = """\
 Cannot reach openrouter.ai (network error: {err}).
 
-This skill requires outbound HTTPS to openrouter.ai. Common cause: running
-inside claude.ai's code-execution sandbox, whose egress allowlist does not
-include openrouter.ai.
+The relay needs outbound HTTPS to openrouter.ai. Common cause: running inside
+claude.ai's code-execution sandbox without openrouter.ai on the domain
+allowlist.
 
-Where this skill works:
-  - Claude Code (full machine, full network)
-  - claude.ai with a local-fs / shell connector (Anthropic's File System
-    plugin, Desktop Commander, or any equivalent that lets Claude run
-    commands on the user's actual machine). The script runs there, not in
-    the sandbox; the audio file must be on the local filesystem, not a
+Ways to fix:
+  - claude.ai: the user adds openrouter.ai under Settings -> Capabilities ->
+    Domain allowlist (web or desktop, not the mobile app), then starts a
+    fresh chat. Rows are read at container start.
+  - Claude Code, or claude.ai with a local-fs / shell connector (Anthropic's
+    File System plugin, Desktop Commander, or equivalent): run the script on
+    the user's machine. The audio file must be on that filesystem, not a
     /mnt/user-data/uploads/ chat upload.
 
-If using claude.ai without such a connector, this skill cannot run here.
+look_at_audio.py needs no network and still works here.
 """
 
 
@@ -650,7 +652,8 @@ def main() -> None:
         return
 
     if args.audio is None:
-        ap.error("audio is required unless --list-models is used")
+        ap.error("audio is required unless --check-key, --list-models or "
+                 "--list-live-models is used")
 
     if args.max_tokens < 800:
         # Thinking-capable models (the Gemini flash line) spend budget on

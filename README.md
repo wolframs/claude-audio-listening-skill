@@ -31,7 +31,7 @@ use both when a claim matters, and to keep what the relay said apart from what
 it inferred from it.
 
 **Refuses to fake it.** The entire design problem here is that the failure mode
-is *invisible*. A model that never received the audio still returns fluent,
+is *invisible*. A model that never received the audio can still return fluent,
 confident music criticism. The skill checks
 `usage.prompt_tokens_details.audio_tokens` on every call, prints which provider
 served it, and marks the description unverified when the count is zero — then
@@ -61,9 +61,10 @@ lyrics, pinned to each provider three times (Sep 2026):
 
 Every provider that answered had heard the clip, and every one reported zero
 audio tokens. The misses were empty responses, mostly the model reasoning until
-its 1500-token budget ran out; with 3000, DeepInfra went 3 of 3. An earlier version of this README took one such
-zero-token, empty MiMo response as proof the model can't hear. It can. (Models
-also keep swapping in `xiaomi/mimo-v2.5-pro`, which really is text-only.)
+its 1500-token budget ran out; with 3000, DeepInfra went 3 of 3. An earlier
+version of this README took one such zero-token, empty MiMo response as proof
+the model can't hear. It can. (Models also keep swapping in
+`xiaomi/mimo-v2.5-pro`, which really is text-only.)
 
 So the skill treats `audio_tokens > 0` as proof and zero as nothing. The check
 that settles it is content the prompt can't supply: known lyrics, or section
@@ -90,9 +91,9 @@ audio-listening/
 ## Install
 
 **Claude.ai** — Settings → Capabilities → Skills → upload the packaged
-`.skill` file. The sandbox route additionally needs `openrouter.ai` on your
-domain allowlist (Settings → Capabilities), **which is not reachable from the
-mobile app** — do that part on web or desktop, and start a fresh chat
+`.skill` file. For the relay, the sandbox route also needs `openrouter.ai` on
+your domain allowlist (Settings → Capabilities), **which is not reachable from
+the mobile app** — do that part on web or desktop, and start a fresh chat
 afterwards, because allowlist rows are baked in at container start.
 
 **Claude Code** — drop the folder into `~/.claude/skills/audio-listening/`.
@@ -104,8 +105,8 @@ standard library.
 ## Setup
 
 The relay needs an OpenRouter key; none ships with this. The picture needs
-nothing. Ask Claude to walk
-you through [`references/api-key-setup.md`](references/api-key-setup.md), or:
+nothing. Ask Claude to walk you through
+[`references/api-key-setup.md`](references/api-key-setup.md), or:
 
 ```bash
 # 1. openrouter.ai/settings/keys → Create Key → set a credit limit of $1

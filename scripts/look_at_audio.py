@@ -43,7 +43,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".aiff"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".aiff",
+              ".webm"}
 
 
 # ─── ffmpeg plumbing ───────────────────────────────────────────────────────
