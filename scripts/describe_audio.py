@@ -21,6 +21,7 @@ Usage:
   python describe_audio.py path/to/track.mp3 --cross-check
   python describe_audio.py path/to/track.mp3 --max-seconds 90 --shrink
   python describe_audio.py path/to/track.mp3 --out ears.md   # incremental write
+  python describe_audio.py path/to/track.mp3 --ignore-providers DeepInfra
   python describe_audio.py path/to/track.mp3 --prompt "focus on rhythm and mood"
   python describe_audio.py path/to/track.flac  # converts to mp3 first
 """
@@ -43,12 +44,11 @@ from pathlib import Path
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
-# Sep 2026: a MiMo request came back with usage.audio_tokens == 0 — the audio
-# block was accepted, billed as text, and never reached the model, which then
-# invented a description from the prompt. MiMo v2.5 does take audio; likelier
-# causes are the text-only -pro slug or OpenRouter routing to a provider that
-# drops audio. See "The silent-drop trap" in SKILL.md. input_modalities is not
-# evidence; audio_tokens in the response is.
+# Sep 2026: usage counts don't show whether the audio arrived on every model.
+# Every xiaomi/mimo-v2.5 provider reported audio_tokens == 0 while transcribing
+# a clip correctly, with prompt_tokens anywhere from 20 to 513. Gemini's counts
+# are reliable. audio_tokens > 0 is proof; zero proves nothing. What settles it
+# is content the prompt can't supply. See "The silent-drop trap" in SKILL.md.
 DEFAULT_MODEL = "google/gemini-3.8-flash"
 CROSS_CHECK_PARTNER = "google/gemini-3.7-flash"
 
@@ -317,7 +317,8 @@ def plan_chunks(mp3_path: Path) -> tuple[list[Path], list[tuple[float, float]], 
 # ─── OpenRouter call ───────────────────────────────────────────────────────
 def describe_chunk(chunk_path: Path, prompt: str, api_key: str, model: str,
                    chunk_label: str | None = None, timeout: int = 180,
-                   max_tokens: int = 1500) -> str:
+                   max_tokens: int = 3000,
+                   ignore_providers: list[str] | None = None) -> str:
     """Send one audio chunk to OpenRouter and return its description text."""
     with open(chunk_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("ascii")
@@ -338,6 +339,11 @@ def describe_chunk(chunk_path: Path, prompt: str, api_key: str, model: str,
             ],
         }],
     }
+
+    if ignore_providers:
+        # Providers of the same model differ in reliability; see
+        # "The silent-drop trap" in SKILL.md.
+        payload["provider"] = {"ignore": ignore_providers}
 
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -362,27 +368,34 @@ def describe_chunk(chunk_path: Path, prompt: str, api_key: str, model: str,
 
     usage = data.get("usage") or {}
     audio_tokens = (usage.get("prompt_tokens_details") or {}).get("audio_tokens")
+    provider = data.get("provider") or "unknown provider"
+    prompt_tokens = usage.get("prompt_tokens")
+    via = f"{model} via {provider}"
     if audio_tokens == 0:
-        print(
-            f"\n!! {model} reported audio_tokens=0 — the audio was NOT ingested.\n"
-            f"!! Any description below is invented from the text prompt alone.\n"
-            f"!! Check the slug is not a text-only variant (e.g. -pro), then retry\n"
-            f"!! or switch models; see 'The silent-drop trap' in SKILL.md.\n",
-            file=sys.stderr, flush=True)
+        print(f"_{via}: provider reported 0 audio tokens (prompt_tokens "
+              f"{prompt_tokens}) — unverified; some providers report 0 even "
+              f"when the audio arrived_", file=sys.stderr, flush=True)
     elif audio_tokens:
-        print(f"_{model}: {audio_tokens} audio tokens ingested_",
+        print(f"_{via}: {audio_tokens} audio tokens ingested "
+              f"({prompt_tokens} prompt tokens)_",
               file=sys.stderr, flush=True)
 
     try:
         content = data["choices"][0]["message"]["content"]
         if not (content or "").strip():
             fr = data["choices"][0].get("finish_reason")
-            return (f"_[empty response from {model} (finish_reason={fr}, "
-                    f"audio_tokens={audio_tokens}) — the audio may not have arrived]_")
+            if fr == "length":
+                return (f"_[empty response from {via}: it spent the whole "
+                        f"--max-tokens budget ({max_tokens}) reasoning. Retry "
+                        f"with a higher --max-tokens]_")
+            return (f"_[empty response from {via} (finish_reason={fr}). Retry; "
+                    f"if it repeats, add --ignore-providers '{provider}']_")
         if audio_tokens == 0:
-            content = ("> **WARNING: audio_tokens=0 — this model did not receive "
-                       "the audio. Treat everything below as fabricated.**\n\n"
-                       + content)
+            content = (f"> _Unverified: {provider} reported 0 audio tokens, "
+                       "which some providers do even when the audio arrived. "
+                       "Check this against something the prompt can't supply "
+                       "(known lyrics, look_at_audio.py) before trusting it._"
+                       "\n\n" + content)
         return content
     except (KeyError, IndexError, TypeError):
         return f"_[chunk failed: unexpected response shape: {json.dumps(data)[:300]}]_"
@@ -476,8 +489,9 @@ def describe_audio(
     shrink: bool = False,
     cross_check: str | None = None,
     timeout: int = 180,
-    max_tokens: int = 1500,
+    max_tokens: int = 3000,
     out_path: Path | None = None,
+    ignore_providers: list[str] | None = None,
 ) -> str:
     """Describe an audio file and return markdown.
 
@@ -559,7 +573,8 @@ def describe_audio(
                     emit([f"### {mdl}", ""])
                 print(f"_calling {mdl}..._", file=sys.stderr, flush=True)
                 description = describe_chunk(chunk, prompt, api_key, mdl, label,
-                                             timeout=timeout, max_tokens=max_tokens)
+                                             timeout=timeout, max_tokens=max_tokens,
+                                             ignore_providers=ignore_providers)
                 emit([description.strip(), ""])
     finally:
         import shutil
@@ -592,8 +607,11 @@ def main() -> None:
                     help="write markdown here incrementally as each chunk returns")
     ap.add_argument("--timeout", type=int, default=180,
                     help="per-request HTTP timeout in seconds (default: 180)")
-    ap.add_argument("--max-tokens", type=int, default=1500,
-                    help="cap on description length per chunk (default: 1500)")
+    ap.add_argument("--max-tokens", type=int, default=3000,
+                    help="cap on reasoning + description per chunk (default: 3000)")
+    ap.add_argument("--ignore-providers", default=None, metavar="NAMES",
+                    help="comma-separated OpenRouter providers to skip, as printed "
+                         "after 'via' (e.g. DeepInfra) — for providers that keep failing")
     ap.add_argument("--api-key", default=None,
                     help="OpenRouter key; overrides env and config file")
     ap.add_argument("--check-key", action="store_true",
@@ -655,6 +673,8 @@ def main() -> None:
             timeout=args.timeout,
             max_tokens=args.max_tokens,
             out_path=args.out,
+            ignore_providers=[p.strip() for p in args.ignore_providers.split(",")
+                              if p.strip()] if args.ignore_providers else None,
         ), end="")
     except (FileNotFoundError, RuntimeError, ValueError) as e:
         sys.exit(str(e))

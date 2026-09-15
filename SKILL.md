@@ -1,22 +1,53 @@
 ---
 name: audio-listening
-description: "Use when user shares audio (mp3/wav/m4a/flac/ogg/opus) and Claude needs to perceive its sonic contents — music, mood, instrumentation, lyrics. Routes via an audio-capable model on OpenRouter."
+description: "Use when user shares audio (mp3/wav/m4a/flac/ogg/opus) and Claude needs to perceive its sonic contents — music, mood, instrumentation, lyrics, loudness, structure. Two channels: describe_audio.py sends the audio to an audio-capable model on OpenRouter for a written description; look_at_audio.py renders spectrograms, waveforms and EBU R128 loudness locally, with no key and no network, for Claude to view directly. Use both when the claims matter."
 dependencies: python>=3.8
 ---
 
 # audio-listening
 
-A translation layer between audio and text. Claude can't perceive audio
-natively; an audio-capable model on OpenRouter can. This skill sends audio
-there with a description prompt and returns the description for Claude to read.
+Claude can't perceive audio natively. This skill gives it two ways at the same
+file, and they are not redundant.
+
+| | `describe_audio.py` — the relay | `look_at_audio.py` — the picture |
+|---|---|---|
+| what it does | sends audio to an audio-capable model, returns prose | renders PNGs and measures loudness locally |
+| what Claude gets | another model's **report** of the sound, in words | the **signal**, in a modality Claude has: vision |
+| needs | API key, network, well under a cent per track | ffmpeg only. No key, no network, free |
+| good at | words, mood, genre, instruments, who's singing | level, spectrum, structure, silence, timing |
+| fails by | inventing content that isn't there | having no content at all |
+
+**Use both when a claim matters.** They fail in opposite directions, so
+agreement between them is worth more than either alone. On anything physical
+— level, spectral content, where the silences are — the picture wins. On
+anything semantic — what the words are, whether it's menacing or euphoric —
+the relay wins, because the picture cannot know.
+
+**There is a third failure, and it's the reader's.** Worked example (Sep
+2026): the relay said a bridge was where "the rhythm falls away entirely into a
+wide ambient pool." Claude took that to mean the bridge gets quieter. The
+waveform showed the bridge at the same level as the drop next to it, and EBU
+R128 put the whole track at 3.4 LU of loudness range. The relay was right — the
+drums did stop. The level drop was Claude's own inference, filled in from how
+music usually behaves, and it felt like part of the report. When you pass a
+description on, keep what the relay said apart from what you concluded from
+it, and check physical conclusions on the picture.
+
+# Part 1 — the relay (`describe_audio.py`)
+
+A translation layer between audio and text. An audio-capable model on
+OpenRouter listens; this script sends it the audio with a description prompt
+and returns the description for Claude to read.
 
 ## Setup — do this first if there is no key yet
 
-This skill needs an OpenRouter API key. It ships without one.
+The relay needs an OpenRouter API key. The skill ships without one. The
+picture (Part 2) needs no key at all.
 
 **Claude: if `--check-key` reports no key, stop and walk the user through
-[`references/api-key-setup.md`](references/api-key-setup.md) before doing
-anything else.** It takes about three minutes, covers the monthly spend cap
+[`references/api-key-setup.md`](references/api-key-setup.md) before running
+the relay.** If the user wants something in the meantime, offer the picture.
+Setup takes about three minutes, covers the monthly spend cap
 (which is the actual safety control here, not secrecy), and covers the
 claude.ai domain-allowlist step. Do not guess at a key, do not proceed without
 one, and do not silently switch to describing the filename instead of the audio.
@@ -48,8 +79,9 @@ of any repo, gist, or chat export.
 - **Also verified working:** `google/gemini-3.7-flash` (same price), `google/gemini-3.6-flash`,
   `google/gemini-3.5-flash-lite`, `openai/gpt-audio-mini`
 - `xiaomi/mimo-v2.5` — works, many successful runs through this script, and
-  much cheaper. Gemini 3.8 Flash still describes music better. One logged
-  request came back with `audio_tokens: 0` — see below.
+  about a tenth of Gemini's cost per clip. Gemini 3.8 Flash still describes
+  music better. Its providers report `audio_tokens: 0` even when it hears, and
+  some runs come back empty — see below.
 - `xiaomi/mimo-v2.5-pro` — **text-only, no audio input. Never substitute it for
   `xiaomi/mimo-v2.5`.** It reads like the upgrade. It is not.
 - ~~`xiaomi/mimo-v2-omni`~~ — DEPRECATED at OpenRouter (HTTP 404)
@@ -60,55 +92,63 @@ of any repo, gist, or chat export.
   one arrives that was trained on music itself. When `--list-live-models` shows
   an unfamiliar audio model, tell the user it exists. Offer to run one track
   they know through it next to `google/gemini-3.8-flash`, and compare the
-  timbre and arrangement detail, not just the lyrics. Check `audio_tokens`.
+  timbre and arrangement detail, not just the lyrics. Run the checks below.
 
 ## The silent-drop trap — read before switching models
 
-A request can carry an `input_audio` block, return HTTP 200, bill as plain
-text, and never deliver the audio to the model. Nothing errors.
+A request can carry an `input_audio` block, return HTTP 200, and never deliver
+the audio to the model — and the model may still answer. A fluent description
+invented from the prompt reads exactly like a real one.
 
-Same file, same prompt (Sep 2026):
+One request described a sea shanty as drum-and-bass with rubbery wobble bass
+and a Lapfox-adjacent lineage, complete with a phonetic transcription of the
+intro. Whether that audio arrived is no longer known; either way, nothing in
+the output marked it. **This is the worst possible failure for a translation
+layer.** Claude reads the description as perception. There is no seam to
+notice.
 
-| request | prompt_tokens | audio_tokens | result |
-|---|---|---|---|
-| MiMo, logged as `xiaomi/mimo-v2.5` | 1130 | **0** | 1499 reasoning tokens, empty content |
-| `google/gemini-3.8-flash` | 4340 | **4316** | full description |
+### The token counts don't catch it on every model
 
-An earlier version of this skill concluded MiMo v2.5 is "not an audio model".
-That was wrong — it does take audio. Two likelier causes, neither confirmed:
+The obvious check is `usage.prompt_tokens_details.audio_tokens`. On Gemini it
+works: a 40-second clip reported 1000 audio tokens. On `xiaomi/mimo-v2.5` it
+means nothing. Measured Sep 2026, the same 40-second clip with known lyrics,
+pinned to one OpenRouter provider at a time, three calls each:
 
-1. **The wrong slug.** `xiaomi/mimo-v2.5-pro` is text-only. Models asked to use
-   MiMo reach for `-pro` as the better variant, however plainly they're told
-   not to. Claude: if you are about to type `-pro`, stop.
-2. **Provider routing.** OpenRouter serves `xiaomi/mimo-v2.5` from several
-   providers and picks one per request. A provider that doesn't pass audio
-   through produces exactly this result, and a retry may land elsewhere.
+| MiMo via | heard it | audio_tokens reported | prompt_tokens reported | misses |
+|---|---|---|---|---|
+| Xiaomi | 3 of 3 | 0 | 513 | — |
+| GMICloud | 2 of 3 | 0 | 513 | one empty response |
+| StreamLake | 2 of 3 | 0 (251 on an earlier run) | 20 | one `finish_reason: error` |
+| DeepInfra | 1 of 3 | 0 | 291 | two empty: all 1500 tokens spent reasoning |
 
-The dangerous part is not the empty response — that fails loudly. It is the
-*non-empty* one. Given a shorter prompt, a MiMo request with the same problem
-returned fluent, specific, confident music criticism invented entirely from
-the text: it described a sea shanty as drum-and-bass with rubbery wobble bass
-and a Lapfox-adjacent lineage, complete with a fabricated phonetic
-transcription of an intro the model had not received. Nothing in the output
-signals that no audio arrived.
+Every provider that answered had heard the clip, and every one reported zero
+audio tokens while doing so. `prompt_tokens` is no better: 20 tokens can't
+hold 40 seconds of audio, and StreamLake heard it anyway. On MiMo, neither
+number tells you whether the audio arrived. The misses were all loud — empty
+responses — and the DeepInfra ones are a budget problem, not deafness: the
+model reasons until `--max-tokens` runs out. Rerun with a 3000 budget, DeepInfra
+went 3 of 3, one run using 1654 reasoning tokens.
 
-**This is the worst possible failure for a translation layer.** Claude reads the
-description as perception. There is no seam to notice.
+### The checks that do catch it
 
-### The check that catches it
+1. **`audio_tokens > 0`** — conclusive when present. Zero proves nothing.
+2. **Content the prompt can't supply.** Lyrics that match the ID3 tags or what
+   the user said; section timings and dynamics that match the waveform from
+   `look_at_audio.py`. This is the check that settles it, on every model.
+3. **Not `input_modalities`, not pricing.** `xiaomi/mimo-v2.5` hears audio and
+   lists no separate audio rate.
 
-`input_modalities` is not evidence, and neither is pricing: `xiaomi/mimo-v2.5`
-handles audio but lists no separate audio rate. One thing is:
+The script prints the serving provider and both token counts for every chunk,
+and marks a description unverified when audio tokens come back zero. Before
+adopting any model, run a track with known lyrics through it and read the
+transcript. Cheap is worthless if it isn't listening.
 
-**`usage.prompt_tokens_details.audio_tokens > 0` in the response.** It says the
-audio was tokenized, not merely accepted, and it catches a wrong slug and a bad
-route alike. A three-minute track should produce thousands.
-
-The script checks it on every call and prints a loud warning when it comes back
-zero. Before adopting any model here, run one file through it and read the
-token count. Because routing can change per request, a model that passed once
-can still fail later — the per-call check is the one that counts. Cheap is
-worthless if it isn't listening.
+An earlier version of this skill called MiMo v2.5 "not an audio model", from
+one request that returned `audio_tokens: 0`, 1499 reasoning tokens and an empty
+answer. That matches the DeepInfra misses above: a spent budget, not a model
+that can't hear. Models asked to use MiMo also keep swapping in
+`xiaomi/mimo-v2.5-pro`, which really is text-only. Claude: if you are about to
+type `-pro`, stop.
 
 A second tell, free and instant: **if the output is dominated by a lyric
 transcript and says almost nothing about timbre or arrangement, you picked a
@@ -125,17 +165,17 @@ speech model.** Most "audio input" models are ASR. They hear words, not music.
 
 - User just wants metadata (use `ffprobe` directly)
 - User wants pure speech transcription (a dedicated ASR model is cheaper/better)
-- No internet or no key — the skill cannot run
+- No internet or no key — the relay cannot run. The picture still can
 
 ## Prerequisites
 
 - `ffmpeg` and `ffprobe` on PATH
-- An OpenRouter API key reachable by the script (see Setup)
-- Internet access from the execution environment
+- An OpenRouter API key reachable by the script (see Setup) — relay only
+- Internet access from the execution environment — relay only
 
 ## Runtime requirements (read this before invoking)
 
-This skill needs two things at the same time, in the same execution environment:
+The relay needs two things at the same time, in the same execution environment:
 (1) read access to the audio file, (2) outbound HTTPS to `openrouter.ai`.
 Not every Claude surface provides both. The matrix:
 
@@ -206,10 +246,11 @@ Claude Code has no such limit — none of this is needed there.
    file actually lives, and if there's a mismatch, ask the user to provide
    the file via the matching path before invoking.
 
-2. **Network reachability.** If running in the claude.ai sandbox alone, the
-   skill cannot complete — warn the user up front rather than letting the
-   preflight fail mid-task. They'll need Claude Code or a claude.ai
-   connector that gives Claude local-machine shell access.
+2. **Network reachability.** If running in the claude.ai sandbox without
+   `openrouter.ai` on the allowlist, the relay cannot complete — warn the
+   user up front rather than letting the preflight fail mid-task. They'll
+   need to allowlist it, or use Claude Code or a claude.ai connector that
+   gives Claude local-machine shell access. The picture works regardless.
 
 The most graceful failure is a clear explanation up front, not a confusing
 error after the user has waited.
@@ -255,6 +296,9 @@ python scripts/describe_audio.py track.mp3 --cross-check
 # Fit a constrained execution window
 python scripts/describe_audio.py track.mp3 --shrink --max-seconds 90 --out ears.md
 
+# Skip a provider that keeps failing (name as printed after "via")
+python scripts/describe_audio.py track.mp3 --model xiaomi/mimo-v2.5 --ignore-providers DeepInfra
+
 # What actually accepts audio on OpenRouter today, split by whether an audio rate is listed
 python scripts/describe_audio.py --list-live-models
 
@@ -262,10 +306,11 @@ python scripts/describe_audio.py --list-live-models
 python scripts/describe_audio.py --check-key
 ```
 
-**`--max-tokens` floor.** The Gemini flash models spend budget on reasoning
-before writing. Below ~800 the returned `content` is a fragment that starts
-mid-sentence rather than a shorter description. The script warns below 800;
-default is 1500.
+**`--max-tokens` covers reasoning too.** Thinking models spend budget on
+reasoning before writing. Below ~800 the returned `content` is a fragment that
+starts mid-sentence rather than a shorter description, and MiMo via DeepInfra
+has spent a full 1500 on reasoning and returned nothing. Default is 3000 — you
+pay only for tokens used. The script warns below 800.
 
 ## Two response styles
 
@@ -358,7 +403,8 @@ Sep 2026 rates. Gemini 3.8 / 3.7 Flash: $0.75/M input (audio at the same rate),
 $3.75/M output; the `:batch` variant is half that if latency is irrelevant. A
 3:37 track at 64kbps mono tokenized to ~4.3k audio tokens — well under a cent.
 `--cross-check` roughly doubles it. `--shrink` cuts input tokens as well as wall
-clock. There is no cheap tier worth having: the $0.14/M option was not listening.
+clock. `xiaomi/mimo-v2.5` costs about a tenth as much per clip (measured: $0.0004
+vs $0.0038 for 40 seconds) and does listen; Gemini describes music better.
 
 A $1/month spend cap is plenty for personal use. Set one — see
 `references/api-key-setup.md`.
@@ -377,9 +423,144 @@ A $1/month spend cap is plenty for personal use. Set one — see
   means the process was reaped between tool calls. Re-run in the foreground
   with `--shrink`; do not debug the script
 - **Content starting mid-sentence**: `--max-tokens` too low for a thinking model
-- **Empty description with no HTTP error**: the model did not receive audio.
-  Check `audio_tokens` in the warning line. Switch models
+- **Empty description with no HTTP error**: usually the model spent
+  `--max-tokens` on reasoning — the output says so when that's the cause; raise
+  it. Otherwise retry, or `--ignore-providers` the provider named in the output
 - **A confident description that contradicts what the user said the track is**:
-  same cause, worse presentation — the model invented it from the prompt. Check
-  `audio_tokens` before believing any of it
+  the audio may not have arrived, or the model misheard. Run the checks in "The
+  silent-drop trap" before believing any of it
 - **Output is all lyrics, no timbre**: you picked a speech model, not a music model
+
+---
+
+# Part 2 — the picture (`look_at_audio.py`)
+
+Renders audio as PNGs that Claude reads with its own vision, and measures EBU
+R128 loudness. **No API key. No network. No cost.** Runs anywhere ffmpeg does,
+including sandboxes where `openrouter.ai` is blocked. When the relay is
+unavailable this is not a degraded fallback. It is a different instrument, and
+on physical questions a stricter one.
+
+## Invoking
+
+```bash
+python scripts/look_at_audio.py track.mp3                 # spectrogram + waveform + metrics
+python scripts/look_at_audio.py *.mp3 --metrics-only      # comparison table, no images
+python scripts/look_at_audio.py track.mp3 --outdir looks/ # default is ./looks
+python scripts/look_at_audio.py track.mp3 --zoom 60:90    # images of one window, in seconds
+python scripts/look_at_audio.py track.mp3 --spectrum-mode separate  # L/R panels
+```
+
+Then **view the PNGs.** The table is a summary; the images are the evidence.
+Do not report structural claims from the table alone.
+
+**Zoom gotchas:** inside a `--zoom` window the x-axis restarts at 0, so
+timestamps are relative to the window start. Add the offset yourself. And
+`--zoom` only affects the images; the numbers always cover the whole file.
+
+## Reading a waveform
+
+The cheapest and most informative image. At a glance:
+
+- **Periodic vertical teeth** in loud sections = individual kick drums with
+  hard sidechain compression. Each tooth is one kick ducking everything else.
+- **A sustained dip** = the level really drops: a breakdown or a bridge. No dip
+  where the relay described a sparse section is *not* a contradiction. "The
+  drums drop out" is a claim about arrangement, and arrangement can thin at a
+  constant level. It only contradicts a claim about loudness.
+- **A flat sausage end to end** = brick-wall limiting, or platform
+  normalization, or both. The music may still be dynamic in *texture*; it is
+  not dynamic in *level*, and those get conflated constantly.
+- **Isolated tall spikes** above the body = uncompressed transients, usually
+  a lone hit or a vocal shriek that escaped the limiter.
+
+## Reading a spectrogram
+
+- **A hard horizontal edge with black above it** = a lossy codec lowpass baked
+  into the source. Suno exports stop around 16–18 kHz. Unmistakable once seen;
+  the numeric heuristic below is far less reliable.
+- **Horizontal striations** (visible harmonic stacks) = individual tones are
+  resolvable, nothing is masking them. These appear exactly where the
+  arrangement thins out, so locating them locates the sparse passages.
+- **Full-height dark columns** = actual silence, or near it. Mutes, stops,
+  edit points.
+- **A canvas filled DC-to-ceiling for the entire duration** = maximalist wall
+  production, no spectral headroom at any moment.
+- `--spectrum-mode separate` draws L and R as two panels. Near-identical
+  panels mean the passage is essentially mono; visible differences mean real
+  stereo width.
+
+## Reading the numbers
+
+`I` is integrated loudness (LUFS), `LRA` is loudness range (LU), `TP` is true
+peak (dBFS), `>19k` is energy above 19 kHz relative to the full mix (dB). A `?`
+under `>19k` means the file's sample rate is below 40 kHz, so there is nothing
+up there to measure.
+
+**LRA is the interesting one.** It measures how much the level actually moves
+over the piece:
+
+| LRA | means |
+|---|---|
+| < 3 LU | brick — nothing plays alone anywhere |
+| 3–5 LU | flat — texture changes, level doesn't |
+| 5–7 LU | some contour — likely one sparse passage |
+| > 7 LU | genuinely dynamic — something plays unaccompanied |
+
+These bands were calibrated on 13 tracks by one artist from one generator
+(Suno, Sep 2026). Treat them as a starting point on other material.
+
+In that set, LRA did **not** follow duration: a 6:09 track sat at 3.8 LU while
+a 3:06 track hit 6.6. What predicted high LRA was *one genuinely sparse or
+acoustic passage* — a solo instrument, an unaccompanied voice. Don't assume
+long means dynamic; check.
+
+**Platform normalization is detectable.** Across the same set, integrated
+loudness spanned only 2.2 LU (−12.1 to −14.3) across genres from solo violin
+cabaret to gabber. That uniformity is the generator normalizing output, not a
+mixing choice. On such a platform the author controls arrangement dynamics
+*within* a track, not level differences *between* tracks. The script flags this
+when given 3+ files that all sit within 3 LU.
+
+## Two traps, both verified the hard way
+
+**1. `-v error` silently kills the ebur128 summary.** The filter prints its
+summary at info level. Quieting ffmpeg quiets the exact thing you asked for,
+and you get empty fields with a **zero exit code** — which looks like a
+parsing bug and is not. Use `-hide_banner -nostats` instead: no banner, no
+per-frame spam, info-level filter output intact.
+
+```bash
+# WRONG — returns nothing, exits 0
+ffmpeg -v error -i t.mp3 -filter_complex ebur128=peak=true -f null -
+# RIGHT
+ffmpeg -hide_banner -nostats -i t.mp3 -filter_complex ebur128=peak=true -f null -
+```
+
+**2. A single-pole highpass measures its own leakage.** `highpass=f=19000`
+has a slope so gentle that a file with a hard wall at 18 kHz still reads
+about −53 dB — which looks like real high-end content. Cascade four
+two-pole stages for a steep enough skirt, and report the result *relative to
+the full mix*, not absolute. Even then it is a soft heuristic with a fuzzy
+boundary: identical-provenance files land anywhere from −52 to −64 dB
+depending on how much cymbal and distortion leak through. **Confirm the wall
+on the spectrogram**, where there is nothing to argue about.
+
+## When to use which
+
+- **Relay only** — the user wants to know what a track is *like*. Mood, genre,
+  lyrics, vibe check. The picture cannot help.
+- **Picture only** — no network, no key, or the question is production:
+  is it clipping, is it over-compressed, where are the sections, is the
+  source lossy, why don't these tracks match in level.
+- **Both** — any claim that will be repeated back to the user as fact,
+  anything about structure or dynamics, and anything where the relay's
+  description sounds a little too good. The cross-check costs one ffmpeg call.
+
+## What neither channel can do
+
+The picture has no semantics. A spectrogram of a song contains no evidence
+about what is being sung, whether it's funny, or whether it lands. The relay
+has semantics, but they are *reported*, not perceived, and reports can be
+invented. Neither is hearing. Say so when it matters, rather than smoothing
+over the seam.

@@ -9,10 +9,12 @@ out  "warm sawtooth growl under a dry, close-mic'd snare;
 ```
 
 A [Claude Skill](https://docs.claude.com/en/docs/agents-and-tools/agent-skills)
-that gives Claude a **pseudo-ability to hear music**. Claude can't perceive
-audio. An audio-capable model on OpenRouter can. This skill is the translation
-layer between them: audio in, exquisite prose out, for a text-only model to
-read in place of listening.
+that gives Claude a **pseudo-ability to hear music**, two ways. Claude can't
+perceive audio, but an audio-capable model on OpenRouter can: the skill relays
+the audio there and brings back prose for Claude to read in place of
+listening. Claude can see, though: the skill also renders the audio as a
+spectrogram and a waveform and measures its loudness, locally, for Claude to
+look at.
 
 ## What it does
 
@@ -20,11 +22,20 @@ read in place of listening.
 chunks, sends, and returns timbre, instrumentation, structure, emotional arc,
 production character — the things a lyric transcript throws away.
 
+**Looks.** `look_at_audio.py` renders a spectrogram and a waveform and
+measures EBU R128 loudness, with no key and no network. The relay says what a
+track is like; the picture shows where the sections are, whether the level
+ever moves, and whether the source is lossy. They fail in opposite directions —
+the relay can invent, the picture has nothing to invent — so Claude is told to
+use both when a claim matters, and to keep what the relay said apart from what
+it inferred from it.
+
 **Refuses to fake it.** The entire design problem here is that the failure mode
 is *invisible*. A model that never received the audio still returns fluent,
 confident music criticism. The skill checks
-`usage.prompt_tokens_details.audio_tokens` on every single call and stamps a
-loud warning into the output when it comes back zero.
+`usage.prompt_tokens_details.audio_tokens` on every call, prints which provider
+served it, and marks the description unverified when the count is zero — then
+tells Claude to check it against lyrics or the picture before trusting it.
 
 **Fits in a sandbox.** `--shrink`, `--max-seconds` and incremental `--out`
 exist because claude.ai's code sandbox reaps background processes between tool
@@ -32,36 +43,32 @@ calls and gives you about two minutes of foreground wall clock per call.
 
 ## The trap this skill exists to document
 
-An audio request can succeed without the audio ever reaching the model: HTTP
-200, the `input_audio` block accepted, a bill for plain text, no error.
+An audio request can succeed without the audio reaching the model, and the
+model can still answer. A fluent description invented from the prompt reads
+exactly like a real one. Claude reads a description as perception; there is no
+seam to notice.
 
-| request | prompt_tokens | audio_tokens | result |
+The obvious check is the `audio_tokens` count OpenRouter returns. It works on
+Gemini. On `xiaomi/mimo-v2.5` it's useless. Same 40-second clip with known
+lyrics, pinned to each provider three times (Sep 2026):
+
+| MiMo via | heard it | audio_tokens reported | prompt_tokens reported |
 |---|---|---|---|
-| MiMo, logged as `xiaomi/mimo-v2.5` | 1130 | **0** | 1499 reasoning tokens, empty content |
-| `google/gemini-3.8-flash` | 4340 | **4316** | full description |
+| Xiaomi | 3 of 3 | 0 | 513 |
+| GMICloud | 2 of 3 | 0 | 513 |
+| StreamLake | 2 of 3 | 0 | 20 |
+| DeepInfra | 1 of 3 | 0 | 291 |
 
-An earlier version of this README blamed the model and said MiMo v2.5 can't
-hear. It can. Two likelier causes, neither confirmed:
+Every provider that answered had heard the clip, and every one reported zero
+audio tokens. The misses were empty responses, mostly the model reasoning until
+its 1500-token budget ran out; with 3000, DeepInfra went 3 of 3. An earlier version of this README took one such
+zero-token, empty MiMo response as proof the model can't hear. It can. (Models
+also keep swapping in `xiaomi/mimo-v2.5-pro`, which really is text-only.)
 
-1. **The wrong slug.** `xiaomi/mimo-v2.5-pro` is text-only, and models asked to
-   use MiMo keep reaching for `-pro` as the "better" one, however plainly
-   they're told not to.
-2. **Provider routing.** OpenRouter serves `xiaomi/mimo-v2.5` from several
-   providers and picks one per request. One that doesn't pass audio through
-   gives exactly this result.
-
-The empty response is the *harmless* case — it fails loudly. The dangerous case
-is the non-empty one: given a shorter prompt, a MiMo request with the same
-problem described a sea shanty as drum-and-bass with rubbery wobble bass and a
-Lapfox-adjacent lineage, complete with a fabricated phonetic transcription of
-an intro the model had never received. Nothing in the output marks it as
-invention. Claude reads a description as perception; there is no seam to
-notice.
-
-Neither `input_modalities` nor pricing catches it — `xiaomi/mimo-v2.5` hears
-audio but lists no separate audio rate. One check does: **`audio_tokens > 0` in
-the response.** It means the audio was tokenized, not merely accepted, and it
-catches a wrong slug and a bad route alike. The script checks it on every call.
+So the skill treats `audio_tokens > 0` as proof and zero as nothing. The check
+that settles it is content the prompt can't supply: known lyrics, or section
+timings that match the waveform from the picture channel. `input_modalities`
+and pricing prove nothing either way.
 
 A second, free and instant: if the output is all lyrics and nothing about
 timbre, you picked a speech model. Most models advertising audio input are ASR.
@@ -73,7 +80,8 @@ They hear words, not music.
 audio-listening/
 ├── SKILL.md                     # triggering, runtime matrix, failure modes
 ├── scripts/
-│   └── describe_audio.py        # transcode, chunk, POST, verify audio_tokens
+│   ├── describe_audio.py        # the relay: transcode, chunk, POST, check audio_tokens
+│   └── look_at_audio.py         # the picture: spectrogram, waveform, EBU R128 loudness
 ├── references/
 │   └── api-key-setup.md         # the 3-minute setup walkthrough Claude runs with you
 └── config.example.json          # copy to config.json, gitignored
@@ -90,9 +98,13 @@ afterwards, because allowlist rows are baked in at container start.
 **Claude Code** — drop the folder into `~/.claude/skills/audio-listening/`.
 No allowlist, no wall clock, nothing else to do.
 
+Both scripts need `ffmpeg` and `ffprobe` on PATH and nothing outside the Python
+standard library.
+
 ## Setup
 
-You supply your own OpenRouter key; none ships with this. Ask Claude to walk
+The relay needs an OpenRouter key; none ships with this. The picture needs
+nothing. Ask Claude to walk
 you through [`references/api-key-setup.md`](references/api-key-setup.md), or:
 
 ```bash
@@ -122,11 +134,17 @@ is hundreds of listens. Don't reuse a key that has any other job.
 > "What's actually in the low end here?"
 >
 > "Cross-check this one — I think the genre frame is wrong"
+>
+> "Does the bridge actually get quieter, or does it just thin out?"
+>
+> "Why do these twelve tracks all sit at the same loudness?"
 
 ```bash
 python scripts/describe_audio.py track.mp3 --shrink --out ears.md
 python scripts/describe_audio.py track.mp3 --cross-check
 python scripts/describe_audio.py --list-live-models
+python scripts/look_at_audio.py track.mp3                # PNGs into ./looks + metrics
+python scripts/look_at_audio.py '*.mp3' --metrics-only   # loudness table across a set
 ```
 
 ## Honest limitations
@@ -139,6 +157,11 @@ listens of one track returned 110, 120, and 140–145 BPM. There may also be a
 texture floor — three models independently called a track cold and bone-dry
 whose brief asked for vinyl crackle and rain, which is either the generator
 dropping the clause or both model families failing to hear grain. Untested.
+
+The picture has the opposite limit: no semantics at all. A spectrogram holds no
+evidence of what is being sung or whether it lands. Its loudness-range bands
+were calibrated on 13 tracks by one artist from one generator, so treat them as
+a starting point on anything else.
 
 The model roster rots fast. `mimo-v2-omni` 404'd; the Gemini flash line ships
 new checkpoints every few weeks. Don't trust the model list in `SKILL.md` —
